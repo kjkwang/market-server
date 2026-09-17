@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { RedisOptions } from 'ioredis';
+import { decryptPassword } from './utils/cryptoUtils';
 
 // Redis 역할 선택 설정값 ('master' 또는 'slave' / 'replica')
 // ioredis Sentinel 모드에서 read 전용 작업을 replica(slave) 노드로 분기하기 위한 설정값
@@ -44,8 +45,8 @@ export const REDIS_CONFIG: RedisOptions = {
     }
     return false;
   },
-  ...(process.env.REDIS_PASSWORD ? { password: process.env.REDIS_PASSWORD } : {}),
-  ...(process.env.REDIS_SENTINEL_PASSWORD ? { sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD } : {}),
+  ...(process.env.REDIS_PASSWORD ? { password: decryptPassword(process.env.REDIS_PASSWORD) } : {}),
+  ...(process.env.REDIS_SENTINEL_PASSWORD ? { sentinelPassword: decryptPassword(process.env.REDIS_SENTINEL_PASSWORD) } : {}),
 };
 
 // 읽기 전용 작업(Replica/Slave)을 위한 Redis Config
