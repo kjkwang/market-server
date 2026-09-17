@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import Redis from 'ioredis';
-import { CONFIG, REDIS_CONFIG } from '../config';
+import { CONFIG, REDIS_CONFIG, REDIS_READ_CONFIG, REDIS_READ_ROLE } from '../config';
 import { MarketData } from '../types';
 import { SymbolManager } from '../utils/symbolManager';
 
@@ -10,7 +10,7 @@ export class ApiServer {
   private server: ReturnType<typeof this.app.listen> | null = null;
 
   constructor() {
-    this.redisClient = new Redis(REDIS_CONFIG);
+    this.redisClient = new Redis(REDIS_READ_CONFIG);
 
     this.redisClient.on('connect', () => console.log('✅ API Server Redis Client connected.'));
     this.redisClient.on('ready', () => {
@@ -18,11 +18,54 @@ export class ApiServer {
       const port = (this.redisClient.stream as any)?.remotePort || 'unknown';
       console.log(`🔗 API Server Redis Ready - connected to: ${addr}:${port}`);
     });
-    this.redisClient.on('error', (err) => console.warn(`⚠️ API Server Redis error: ${err.message}`));
-    this.redisClient.on('sentinelError', (err) => console.warn(`⚠️ API Server Sentinel error: ${err.message}`));
+    this.redisClient.on('error', (err) => {
+      if (err.message.includes('invalid reply') && (this.redisClient.options as any).role === 'slave') {
+        console.warn('⚠️ [Redis Read Fallback] Sentinel returned no Replica. Switching role to Master for API reads...');
+        (this.redisClient.options as any).role = 'master';
+      } else {
+        console.warn(`⚠️ API Server Redis error: ${err.message}`);
+      }
+    });
+
+    this.redisClient.on('sentinelError', (err) => {
+      if (err.message.includes('invalid reply') && (this.redisClient.options as any).role === 'slave') {
+        console.warn('⚠️ [Redis Read Fallback] No active Replica node registered in Sentinel. Automatically falling back to Master for API reads...');
+        (this.redisClient.options as any).role = 'master';
+      } else {
+        console.warn(`⚠️ API Server Sentinel error: ${err.message}`);
+      }
+    });
 
     this.setupMiddleware();
     this.setupRoutes();
+  }
+
+  private checkTcpPort(host: string, port: number, timeoutMs = 1000): Promise<{ reachable: boolean; latencyMs?: number; error?: string }> {
+    return new Promise((resolve) => {
+      const net = require('net');
+      const start = Date.now();
+      const socket = new net.Socket();
+
+      socket.setTimeout(timeoutMs);
+
+      socket.on('connect', () => {
+        const latencyMs = Date.now() - start;
+        socket.destroy();
+        resolve({ reachable: true, latencyMs });
+      });
+
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve({ reachable: false, error: 'ETIMEDOUT' });
+      });
+
+      socket.on('error', (err: any) => {
+        socket.destroy();
+        resolve({ reachable: false, error: err.message });
+      });
+
+      socket.connect(port, host);
+    });
   }
 
   private setupMiddleware() {
@@ -39,26 +82,65 @@ export class ApiServer {
   private setupRoutes() {
     /**
      * GET /api/health
+     * Redis Master, Replica, 및 Sentinel 노드들의 포트/핑 모니터링 상태 응답
      */
     this.app.get('/api/health', async (_req: Request, res: Response) => {
+      const startTime = Date.now();
+
+      // 1. Redis Client (Master/Read) 핑 검사
+      let redisStatus = 'down';
+      let redisLatencyMs = -1;
       try {
+        const pingStart = Date.now();
         await this.redisClient.ping();
-        res.json({
-          success: true,
-          status: 'ok',
-          redis: 'connected',
-          uptime: Math.floor(process.uptime()),
-          timestamp: new Date().toISOString(),
-        });
-      } catch {
-        res.status(503).json({
-          success: false,
-          status: 'degraded',
-          redis: 'disconnected',
-          uptime: Math.floor(process.uptime()),
-          timestamp: new Date().toISOString(),
-        });
-      }
+        redisLatencyMs = Date.now() - pingStart;
+        redisStatus = 'up';
+      } catch (e) {}
+
+      // 2. Sentinel 노드별 TCP 26379 포트 감시
+      const sentinelsConfig = REDIS_CONFIG.sentinels || [];
+      const sentinelChecks = await Promise.all(
+        sentinelsConfig.map(async (sentinel) => {
+          const host = sentinel.host || '127.0.0.1';
+          const port = sentinel.port || 26379;
+          const check = await this.checkTcpPort(host, port, 1000);
+          return {
+            host,
+            port,
+            status: check.reachable ? 'up' : 'down',
+            ...(check.latencyMs !== undefined ? { latencyMs: check.latencyMs } : {}),
+            ...(check.error ? { error: check.error } : {}),
+          };
+        })
+      );
+
+      const isAllHealthy = redisStatus === 'up' && sentinelChecks.every(s => s.status === 'up');
+      const isDegraded = redisStatus === 'up' && sentinelChecks.some(s => s.status === 'down');
+      const overallStatus = isAllHealthy ? 'ok' : (isDegraded ? 'degraded' : 'down');
+
+      const connectedAddr = (this.redisClient.stream as any)?.remoteAddress || 'unknown';
+      const connectedPort = (this.redisClient.stream as any)?.remotePort || 'unknown';
+      const activeRole = (this.redisClient.options as any)?.role || 'unknown';
+
+      const responsePayload = {
+        success: overallStatus !== 'down',
+        status: overallStatus,
+        serverId: CONFIG.SERVER_ID,
+        uptime: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString(),
+        durationMs: Date.now() - startTime,
+        redis: {
+          status: redisStatus,
+          configuredRole: REDIS_READ_ROLE,
+          activeRole,
+          connectedAddress: `${connectedAddr}:${connectedPort}`,
+          latencyMs: redisLatencyMs,
+        },
+        sentinels: sentinelChecks,
+      };
+
+      const statusCode = overallStatus === 'down' ? 530 : 200;
+      res.status(statusCode).json(responsePayload);
     });
 
     /**

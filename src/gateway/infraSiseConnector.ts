@@ -23,6 +23,10 @@ export class InfraSiseConnector {
       console.log(`🔗 [InfraSise] Ready - connected to Redis server: ${addr}:${port}`);
     });
 
+    this.redisClient.on('error', (err) => {
+      console.warn(`⚠️ [InfraSise] Redis error: ${err.message}`);
+    });
+
     this.redisClient.on('reconnecting', () => {
       console.log('♻️ [InfraSise] Redis client is reconnecting...');
     });
