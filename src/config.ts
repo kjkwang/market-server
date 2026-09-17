@@ -1,5 +1,6 @@
 import { RedisOptions } from 'ioredis';
 
+
 export const REDIS_CONFIG: RedisOptions = {
   sentinels: [
     { host: process.env.REDIS_SENTINEL_HOST_1 || '192.168.0.172', port: Number(process.env.REDIS_SENTINEL_PORT_1) || 26379 },
