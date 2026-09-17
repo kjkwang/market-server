@@ -1,0 +1,17 @@
+[
+  { "symbol": "005930", "name": "삼성전자" },
+  { "symbol": "000660", "name": "SK하이닉스" },
+  { "symbol": "035420", "name": "NAVER" },
+  { "symbol": "035720", "name": "카카오" },
+  { "symbol": "005380", "name": "현대차" },
+  { "symbol": "051910", "name": "LG화학" },
+  { "symbol": "006400", "name": "삼성SDI" },
+  { "symbol": "207940", "name": "삼성바이오로직스" },
+  { "symbol": "068270", "name": "셀트리온" },
+  { "symbol": "000270", "name": "기아" },
+  { "symbol": "012330", "name": "현대모비스" },
+  { "symbol": "066570", "name": "LG전자" },
+  { "symbol": "032830", "name": "삼성생명" },
+  { "symbol": "003550", "name": "LG" },
+  { "symbol": "015760", "name": "한국전력" }
+]
